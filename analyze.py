@@ -148,5 +148,55 @@ def main():
     print(f"Chart saved to {OUTPUT_PNG}")
 
 
+def cleaned_by_days_open():
+    """Chart: % cleaned vs days open for 2025-2026 cases."""
+    df = pd.read_csv(DATA_CSV)
+    df["requested_datetime"] = pd.to_datetime(df["requested_datetime"], utc=True)
+    df["closed_date"] = pd.to_datetime(df["closed_date"], utc=True, errors="coerce")
+    df["resolution_days"] = (
+        df["closed_date"] - df["requested_datetime"]
+    ).dt.total_seconds() / 86400
+    df["category"] = df["status_notes"].apply(classify)
+
+    # 2025-2026, closed, cleaned or not_found only, under 30 days
+    df = df[
+        (df["requested_datetime"] >= "2025-01-01")
+        & df["resolution_days"].notna()
+        & (df["resolution_days"] >= 0)
+        & (df["resolution_days"] < 30)
+        & df["category"].isin(["cleaned", "not_found"])
+    ]
+
+    # Bucket by days open
+    bins = [0, 0.5, 1, 2, 3, 5, 7, 14, 30]
+    labels = ["<12h", "12h-1d", "1-2d", "2-3d", "3-5d", "5-7d", "7-14d", "14-30d"]
+    df = df.copy()
+    df["days_bucket"] = pd.cut(df["resolution_days"], bins=bins, labels=labels, right=False)
+
+    stats = df.groupby("days_bucket", observed=False).apply(
+        lambda g: (g["category"] == "cleaned").mean() * 100
+    )
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(range(len(stats)), stats.values, color="#4CAF50", alpha=0.8)
+    ax.set_xticks(range(len(stats)))
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("Days open before resolution")
+    ax.set_ylabel("% cleaned")
+    ax.set_ylim(0, 100)
+    ax.set_title("% Cleaned vs Days Open (2025–2026, under 30 days)")
+
+    # Add percentage labels on bars
+    for i, v in enumerate(stats.values):
+        ax.text(i, v + 1.5, f"{v:.0f}%", ha="center", fontsize=10)
+
+    fig.tight_layout()
+    out = os.path.join(OUTPUT_DIR, "cleaned_by_days_open.png")
+    fig.savefig(out, dpi=150)
+    print(f"Chart saved to {out}")
+
+
 if __name__ == "__main__":
     main()
+    cleaned_by_days_open()
