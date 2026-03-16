@@ -197,6 +197,85 @@ def cleaned_by_days_open():
     print(f"Chart saved to {out}")
 
 
+def neighborhood_breakdown():
+    """Chart: neighborhood breakdown of resolution time and % cleaned (2025-2026)."""
+    df = pd.read_csv(DATA_CSV)
+    df["requested_datetime"] = pd.to_datetime(df["requested_datetime"], utc=True)
+    df["closed_date"] = pd.to_datetime(df["closed_date"], utc=True, errors="coerce")
+    df["resolution_days"] = (
+        df["closed_date"] - df["requested_datetime"]
+    ).dt.total_seconds() / 86400
+    df["category"] = df["status_notes"].apply(classify)
+
+    # Filter to 2025-2026
+    df = df[df["requested_datetime"] >= "2025-01-01"]
+
+    # Normalize neighborhood names
+    df["neighborhood"] = (
+        df["neighborhoods_sffind_boundaries"].str.strip().str.title()
+    )
+    df = df[df["neighborhood"].notna()]
+
+    # Filter to neighborhoods averaging >5 reports/week
+    date_range = (
+        df["requested_datetime"].max() - df["requested_datetime"].min()
+    )
+    num_weeks = max(date_range.total_seconds() / (7 * 86400), 1)
+    hood_counts = df.groupby("neighborhood").size()
+    qualifying = hood_counts[hood_counts / num_weeks > 5].index
+    df = df[df["neighborhood"].isin(qualifying)]
+
+    # Limit to top 35 by volume
+    top35 = hood_counts[qualifying].nlargest(35).index
+    df = df[df["neighborhood"].isin(top35)]
+
+    # --- Chart 1: Median resolution time for cleaned cases ---
+    cleaned = df[
+        (df["category"] == "cleaned")
+        & df["resolution_days"].notna()
+        & (df["resolution_days"] >= 0)
+    ]
+    median_res = cleaned.groupby("neighborhood")["resolution_days"].median().sort_values()
+
+    # --- Chart 2: % cleaned by neighborhood ---
+    def pct_cleaned(g):
+        is_dup = g["status_notes"].str.contains("duplicate", case=False, na=False)
+        denom = len(g) - is_dup.sum()
+        if denom == 0:
+            return float("nan")
+        return (g["category"] == "cleaned").sum() / denom * 100
+
+    pct = df.groupby("neighborhood").apply(pct_cleaned).sort_values(ascending=True)
+
+    # --- Plot ---
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 20))
+
+    # Chart 1
+    ax1.barh(range(len(median_res)), median_res.values, color="#FF9800", alpha=0.8)
+    ax1.set_yticks(range(len(median_res)))
+    ax1.set_yticklabels(median_res.index, fontsize=9)
+    ax1.set_xlabel("Median resolution (days)")
+    ax1.set_title("Median Resolution Time by Neighborhood (Cleaned Cases, 2025–2026)")
+    for i, v in enumerate(median_res.values):
+        ax1.text(v + 0.1, i, f"{v:.1f}", va="center", fontsize=8)
+
+    # Chart 2
+    ax2.barh(range(len(pct)), pct.values, color="#4CAF50", alpha=0.8)
+    ax2.set_yticks(range(len(pct)))
+    ax2.set_yticklabels(pct.index, fontsize=9)
+    ax2.set_xlabel("% Cleaned")
+    ax2.set_title("% Cleaned by Neighborhood (2025–2026)")
+    for i, v in enumerate(pct.values):
+        ax2.text(v + 0.3, i, f"{v:.0f}%", va="center", fontsize=8)
+
+    fig.tight_layout()
+    out = os.path.join(OUTPUT_DIR, "neighborhood_breakdown.png")
+    fig.savefig(out, dpi=150)
+    print(f"Chart saved to {out}")
+
+
 if __name__ == "__main__":
     main()
     cleaned_by_days_open()
+    neighborhood_breakdown()
